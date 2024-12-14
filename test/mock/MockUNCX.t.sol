@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity >=0.8.25 <0.9.0;
 
-import { IUNCX, INonfungiblePositionManager } from "src/external/IUNCX.sol";
+import { IUNCX, INonfungiblePositionManager } from "../../src/external/IUNCX.sol";
 import { IERC721Receiver } from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
 contract MockUNCX is IUNCX, IERC721Receiver {

@@ -8,12 +8,15 @@ import { MockUniswapNonfungiblePositionManager } from "./mock/MockUniswapNonfung
 import { MockUniswapV3Deployer } from "./mock/MockUniswapV3Deployer.t.sol";
 import { MockUNCX, IUNCX } from "./mock/MockUNCX.t.sol";
 
+import {PartyLaunchFactory} from "../src/PartyLaunchFactory.sol";
 import "../src/PartyTokenLauncher.sol";
+
 
 contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
     event AllowlistUpdated(uint32 indexed launchId, bytes32 oldMerkleRoot, bytes32 newMerkleRoot);
 
-    PartyTokenLauncher launch;
+    PartyLaunchFactory launchFactory;
+    PartyTokenLauncher launchImpl;
     PartyERC20 partyERC20Logic;
     PartyTokenAdminERC721 creatorNFT;
     address payable partyDAO;
@@ -42,23 +45,24 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         creatorNFT = new PartyTokenAdminERC721("PartyTokenAdminERC721", "PTA721", address(this));
         positionLocker = new PartyLPLocker(address(this), positionManager, creatorNFT, uncx);
         partyERC20Logic = new PartyERC20(creatorNFT);
-        launch = new PartyTokenLauncher(
+        launchImpl = new PartyTokenLauncher(
             partyDAO, creatorNFT, partyERC20Logic, positionManager, uniswapFactory, weth, poolFee, positionLocker
         );
-        creatorNFT.setIsMinter(address(launch), true);
+        launchFactory = new PartyLaunchFactory();
+        // creatorNFT.setIsMinter(address(launch), true);
     }
 
     function test_constructor_works() public view {
-        assertEq(address(launch.owner()), partyDAO);
-        assertEq(address(launch.TOKEN_ADMIN_ERC721()), address(creatorNFT));
-        assertEq(address(launch.POSITION_MANAGER()), address(positionManager));
-        assertEq(address(launch.UNISWAP_FACTORY()), address(uniswapFactory));
-        assertEq(address(launch.WETH()), weth);
-        assertEq(launch.POOL_FEE(), poolFee);
-        assertEq(address(launch.POSITION_LOCKER()), address(positionLocker));
+        assertEq(address(launchImpl.owner()), partyDAO);
+        assertEq(address(launchImpl.TOKEN_ADMIN_ERC721()), address(creatorNFT));
+        assertEq(address(launchImpl.POSITION_MANAGER()), address(positionManager));
+        assertEq(address(launchImpl.UNISWAP_FACTORY()), address(uniswapFactory));
+        assertEq(address(launchImpl.WETH()), weth);
+        assertEq(launchImpl.POOL_FEE(), poolFee);
+        assertEq(address(launchImpl.POSITION_LOCKER()), address(positionLocker));
     }
 
-    function test_createLaunch_works() public returns (uint32 launchId, PartyERC20 token) {
+    function test_createLaunch_works() public returns (PartyTokenLauncher launch, PartyERC20 token) {
         address creator = vm.createWallet("Creator").addr;
         address recipient = vm.createWallet("Recipient").addr;
         vm.deal(creator, 1 ether);
@@ -92,22 +96,21 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         });
 
         vm.prank(creator);
-        launchId = launch.createLaunch{ value: 1 ether }(erc20Args, launchArgs, "I am the creator");
+        launch = launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        token = launch.token();
 
-        assertTrue(launch.getLaunchLifecycle(launchId) == PartyTokenLauncher.LaunchLifecycle.Active);
+        vm.prank(creator);
+        launch.contribute{ value: 1 ether }(address(token), "", new bytes32[](0));
 
-        // To avoid stack too deep errors
-        (, bytes memory res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        uint96 totalContributions;
-        (token,, totalContributions) = abi.decode(res, (PartyERC20, uint96, uint96));
+        assertEq(launch.WETH(), weth);
+        assertEq(launch.owner(), partyDAO);
 
-        uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(launchId, 1 ether);
-        assertEq(launch.tokenToLaunchId(token), launchId);
-        assertEq(token.balanceOf(creator), expectedTokensReceived);
-        assertEq(token.totalSupply(), erc20Args.totalSupply);
-        assertEq(totalContributions, 1 ether);
+        assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Active);
+
+        uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(1 ether);
+        assertEq(launch.token().balanceOf(creator), expectedTokensReceived);
+        assertEq(launch.token().totalSupply(), erc20Args.totalSupply);
         assertEq(creator.balance, 0);
-        assertEq(address(launch).balance, 1 ether);
     }
 
     function test_createLaunch_withFullContribution() public returns (uint32 launchId) {
@@ -144,9 +147,10 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         });
 
         vm.prank(creator);
-        launchId = launch.createLaunch{ value: 10 ether }(erc20Args, launchArgs, "");
+        PartyTokenLauncher launch = launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        launch.contribute{ value: 10 ether }(address(launch.token()), "", new bytes32[](0));
 
-        assertTrue(launch.getLaunchLifecycle(launchId) == PartyTokenLauncher.LaunchLifecycle.Finalized);
+        assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Finalized);
     }
 
     function test_createLaunch_invalidFee() external {
@@ -184,39 +188,36 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidFee.selector);
-        launch.createLaunch{ value: 1 ether }(erc20Args, launchArgs, "Launch comment");
+        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
 
         launchArgs.finalizationFeeBps = 0;
         launchArgs.withdrawalFeeBps = 251;
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidFee.selector);
-        launch.createLaunch{ value: 1 ether }(erc20Args, launchArgs, "The first contribution!");
+        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
     }
 
     function test_updateAllowlist_works() public {
-        (uint32 launchId,) = test_createLaunch_works();
+        (PartyTokenLauncher launch,) = test_createLaunch_works();
         bytes32 newMerkleRoot = keccak256(abi.encodePacked("newMerkleRoot"));
 
-        address tokenAdmin = creatorNFT.ownerOf(launchId);
+        address tokenAdmin = creatorNFT.ownerOf(1); // TODO: Implement owner NFT
 
         vm.expectEmit(true, true, true, true);
-        emit AllowlistUpdated(launchId, bytes32(0), newMerkleRoot);
+        emit AllowlistUpdated(1, bytes32(0), newMerkleRoot);
 
         vm.prank(tokenAdmin);
-        launch.updateAllowlist(launchId, newMerkleRoot);
+        launch.updateAllowlist(newMerkleRoot);
 
-        (, bytes memory res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (, bytes32 updatedMerkleRoot) = abi.decode(res, (PartyERC20, bytes32));
-
-        assertEq(updatedMerkleRoot, newMerkleRoot);
+        assertEq(launch.merkleRoot(), newMerkleRoot);
     }
 
     function test_updateAllowlist_invalidLifecycle() public {
-        (uint32 launchId,) = test_finalize_works();
+        (PartyTokenLauncher launch,) = test_createLaunch_works();
         bytes32 newMerkleRoot = keccak256(abi.encodePacked("newMerkleRoot"));
 
-        address tokenAdmin = creatorNFT.ownerOf(launchId);
+        address tokenAdmin = creatorNFT.ownerOf(1); // TODO: Implement owner NFT
 
         vm.prank(tokenAdmin);
         vm.expectRevert(
@@ -226,71 +227,62 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
                 PartyTokenLauncher.LaunchLifecycle.Active
             )
         );
-        launch.updateAllowlist(launchId, newMerkleRoot);
+        launch.updateAllowlist(newMerkleRoot);
     }
 
     function test_updateAllowlist_onlyAdmin() public {
-        (uint32 launchId,) = test_createLaunch_works();
+        (PartyTokenLauncher launch,) = test_createLaunch_works();
         bytes32 newMerkleRoot = keccak256(abi.encodePacked("newMerkleRoot"));
 
         address nonAdmin = vm.createWallet("NonAdmin").addr;
 
         vm.prank(nonAdmin);
         vm.expectRevert(abi.encodeWithSelector(PartyTokenLauncher.OnlyAdmin.selector, vm.createWallet("Creator").addr));
-        launch.updateAllowlist(launchId, newMerkleRoot);
+        launch.updateAllowlist(newMerkleRoot);
     }
 
     function test_contribute_works() public {
-        (uint32 launchId, PartyERC20 token) = test_createLaunch_works();
+        (PartyTokenLauncher launch, PartyERC20 token) = test_createLaunch_works();
         address contributor = vm.createWallet("Contributor").addr;
         vm.deal(contributor, 5 ether);
 
         vm.prank(contributor);
-        launch.contribute{ value: 5 ether }(launchId, address(token), "Adding funds", new bytes32[](0));
+        launch.contribute{ value: 5 ether }(address(token), "Adding funds", new bytes32[](0));
 
-        // To avoid stack too deep errors
-        (, bytes memory res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        uint96 totalContributions;
-        (token,, totalContributions) = abi.decode(res, (PartyERC20, uint96, uint96));
-
-        uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(launchId, 5 ether);
+        uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(5 ether);
         assertEq(token.balanceOf(contributor), expectedTokensReceived);
-        assertEq(totalContributions, 6 ether);
+        assertEq(launch.totalContributions(), 6 ether);
         assertEq(contributor.balance, 0);
         assertEq(address(launch).balance, 6 ether);
     }
 
     function test_contribute_refundExcessContribution() public {
-        (uint32 launchId, PartyERC20 token) = test_createLaunch_works();
+        (PartyTokenLauncher launch, PartyERC20 token) = test_createLaunch_works();
         // Total contribution: 1 ether
 
         address contributor = vm.createWallet("Contributor").addr;
         vm.deal(contributor, 2 ether);
 
         vm.prank(contributor);
-        launch.contribute{ value: 2 ether }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 2 ether }(address(token), "", new bytes32[](0));
         // Total contribution: 3 ether
 
         address finalContributor = vm.createWallet("Final Contributor").addr;
         vm.deal(finalContributor, 8 ether);
 
         vm.prank(finalContributor);
-        launch.contribute{ value: 8 ether }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 8 ether }(address(token), "", new bytes32[](0));
         // Total contribution: 10 ether (expect 1 ether refund)
 
-        // To avoid stack too deep errors
-        (, bytes memory res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (,, uint96 totalContributions, uint96 targetContribution) =
-            abi.decode(res, (PartyERC20, bytes32, uint96, uint96));
 
-        assertTrue(launch.getLaunchLifecycle(launchId) == PartyTokenLauncher.LaunchLifecycle.Finalized);
-        assertEq(token.balanceOf(finalContributor), launch.convertETHContributedToTokensReceived(launchId, 7 ether));
-        assertEq(totalContributions, targetContribution);
+        assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Finalized);
+        assertEq(token.balanceOf(finalContributor), launch.convertETHContributedToTokensReceived(7 ether));
+        assertEq(launch.totalContributions(), launch.targetContribution());
         assertEq(finalContributor.balance, 1 ether);
     }
 
     function test_contribute_maxContributionCheckAfterExcessDeduction() public {
-        (uint32 launchId, PartyERC20 token) = test_createLaunch_works();
+        (PartyTokenLauncher launch, PartyERC20 token) = test_createLaunch_works();
         address creator = vm.createWallet("Creator").addr;
         vm.deal(creator, 1 ether);
         address contributor = vm.createWallet("Contributor").addr;
@@ -298,119 +290,101 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         // Contribute 1 ether so that 8 ether is required to finalize
         vm.prank(creator);
-        launch.contribute{ value: 1 ether }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 1 ether }(address(token), "", new bytes32[](0));
 
         // Contribute 9 ether, which exceeds max contribution per address, but
         // should be accepted because 1 ether was refunded
         vm.prank(contributor);
-        launch.contribute{ value: 9 ether }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 9 ether }(address(token), "", new bytes32[](0));
 
         assertEq(contributor.balance, 1 ether); // 1 ether should be refunded
     }
 
     function test_contribute_cannotExceedMaxContributionPerAddress() public {
-        (uint32 launchId, PartyERC20 token) = test_createLaunch_works();
+        (PartyTokenLauncher launch, PartyERC20 token) = test_createLaunch_works();
         address contributor = vm.createWallet("Contributor").addr;
         vm.deal(contributor, 8 ether + 1);
 
         vm.prank(contributor);
-        launch.contribute{ value: 8 ether }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 8 ether }(address(token), "", new bytes32[](0));
 
         vm.prank(contributor);
         vm.expectRevert(
             abi.encodeWithSelector(PartyTokenLauncher.ContributionsExceedsMaxPerAddress.selector, 1, 8 ether, 8 ether)
         );
-        launch.contribute{ value: 1 }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 1 }(address(token), "", new bytes32[](0));
     }
 
     function test_contribute_tokenAddressDoesNotMatch() external {
-        (uint32 launchId,) = test_createLaunch_works();
+        (PartyTokenLauncher launch,) = test_createLaunch_works();
         address contributor = vm.createWallet("Contributor").addr;
         vm.deal(contributor, 5 ether);
 
         vm.prank(contributor);
         vm.expectRevert(PartyTokenLauncher.LaunchInvalid.selector);
-        launch.contribute{ value: 5 ether }(launchId, address(uncx), "", new bytes32[](0));
+        launch.contribute{ value: 5 ether }(address(uncx), "", new bytes32[](0));
     }
 
     function test_withdraw_works() public {
-        (uint32 launchId, PartyERC20 token) = test_createLaunch_works();
+        (PartyTokenLauncher launch, PartyERC20 token) = test_createLaunch_works();
         address creator = vm.createWallet("Creator").addr;
-
-        // To avoid stack too deep errors
-        (, bytes memory res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (,, uint96 totalContributions) = abi.decode(res, (PartyERC20, uint96, uint96));
 
         uint96 tokenBalance = uint96(token.balanceOf(creator));
 
         vm.prank(creator);
-        uint96 ethReceived = launch.withdraw(launchId, creator);
+        uint96 ethReceived = launch.withdraw(creator);
 
-        uint96 expectedETHReturned = launch.convertTokensReceivedToETHContributed(launchId, tokenBalance);
+        uint96 expectedETHReturned = launch.convertTokensReceivedToETHContributed(tokenBalance);
         uint96 withdrawalFee = (expectedETHReturned * withdrawalFeeBps) / 10_000;
         assertEq(creator.balance, expectedETHReturned - withdrawalFee);
         assertEq(ethReceived, expectedETHReturned - withdrawalFee);
         assertEq(token.balanceOf(creator), 0);
         assertEq(partyDAO.balance, withdrawalFee);
-        (, res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (token,, totalContributions) = abi.decode(res, (PartyERC20, uint96, uint96));
-        assertEq(totalContributions, 0);
+        assertEq(launch.totalContributions(), 0);
     }
 
     function test_withdraw_differentReceiver() public {
-        (uint32 launchId, PartyERC20 token) = test_createLaunch_works();
+        (PartyTokenLauncher launch, PartyERC20 token) = test_createLaunch_works();
         address creator = vm.createWallet("Creator").addr;
         address receiver = vm.createWallet("Receiver").addr;
 
         uint96 tokenBalance = uint96(token.balanceOf(creator));
 
         vm.prank(creator);
-        uint96 ethReceived = launch.withdraw(launchId, receiver);
+        uint96 ethReceived = launch.withdraw(receiver);
 
-        uint96 expectedETHReturned = launch.convertTokensReceivedToETHContributed(launchId, tokenBalance);
+        uint96 expectedETHReturned = launch.convertTokensReceivedToETHContributed(tokenBalance);
         uint96 withdrawalFee = (expectedETHReturned * withdrawalFeeBps) / 10_000;
         assertEq(receiver.balance, expectedETHReturned - withdrawalFee);
         assertEq(ethReceived, expectedETHReturned - withdrawalFee);
         assertEq(creator.balance, 0);
     }
 
-    function test_finalize_works() public returns (uint32 launchId, PartyERC20 token) {
-        (launchId, token) = test_createLaunch_works();
-
-        // To avoid stack too deep errors
-        (, bytes memory res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (,, uint96 totalContributions, uint96 targetContribution) =
-            abi.decode(res, (PartyERC20, bytes32, uint96, uint96));
+    function test_finalize_works() public returns (PartyTokenLauncher launch, PartyERC20 token) {
+        (launch, token) = test_createLaunch_works();
 
         address contributor = vm.createWallet("Contributor").addr;
         vm.deal(contributor, 2 ether);
         vm.prank(contributor);
-        launch.contribute{ value: 2 ether }(launchId, address(token), "", new bytes32[](0));
+        launch.contribute{ value: 2 ether }(address(token), "", new bytes32[](0));
 
         address contributor2 = vm.createWallet("Final Contributor").addr;
 
-        (, res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (,, totalContributions, targetContribution) = abi.decode(res, (PartyERC20, bytes32, uint96, uint96));
-
-        uint96 remainingContribution = targetContribution - totalContributions;
+        uint96 remainingContribution = launch.targetContribution() - launch.totalContributions();
         vm.deal(contributor2, remainingContribution);
 
         vm.prank(contributor2);
-        launch.contribute{ value: remainingContribution }(launchId, address(token), "Finalize", new bytes32[](0));
+        launch.contribute{ value: remainingContribution }(address(token), "Finalize", new bytes32[](0));
 
-        assertTrue(launch.getLaunchLifecycle(launchId) == PartyTokenLauncher.LaunchLifecycle.Finalized);
+        assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Finalized);
 
-        // To avoid stack too deep errors
-        (, res) = address(launch).staticcall(abi.encodeCall(launch.launches, (launchId)));
-        (,, totalContributions) = abi.decode(res, (PartyERC20, uint96, uint96));
-
-        uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(launchId, remainingContribution);
+        uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(remainingContribution);
         assertEq(token.balanceOf(contributor2), expectedTokensReceived);
-        assertEq(totalContributions, targetContribution);
+        assertEq(launch.totalContributions(), launch.targetContribution());
         assertEq(contributor2.balance, 0);
         assertEq(token.balanceOf(address(launch)), 0);
         assertEq(address(launch).balance, 0);
-        (,, bool launchSuccessful,) = creatorNFT.tokenMetadatas(launchId);
+        (,, bool launchSuccessful,) = creatorNFT.tokenMetadatas(1);
         assertEq(launchSuccessful, true);
     }
 
@@ -453,12 +427,12 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidBps.selector);
-        launch.createLaunch{ value: 1 ether }(erc20Args, launchArgs, "");
+        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
     }
 
     function test_constructor_invalidUniswapPoolFee() external {
         vm.expectRevert(PartyTokenLauncher.InvalidUniswapPoolFee.selector);
-        launch = new PartyTokenLauncher(
+        new PartyTokenLauncher(
             partyDAO,
             creatorNFT,
             partyERC20Logic,
@@ -471,7 +445,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
     }
 
     function test_VERSION_works() public view {
-        assertEq(launch.VERSION(), "1.0.0");
+        assertEq(launchImpl.VERSION(), "1.0.0");
     }
 
     function test_createLaunch_invalidRecipient() public returns (uint32 launchId) {
@@ -506,6 +480,6 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidRecipient.selector);
-        launchId = launch.createLaunch{ value: 1 ether }(erc20Args, launchArgs, "I'm the first contributor");
+        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
     }
 }

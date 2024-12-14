@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.25;
 
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -17,7 +16,7 @@ import { INonfungiblePositionManager } from "@uniswap/v3-periphery/contracts/int
 import { ILocker } from "./interfaces/ILocker.sol";
 import { Implementation } from "./utils/Implementation.sol";
 
-contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
+contract PartyTokenLauncher is IERC721Receiver, Implementation {
     using MerkleProof for bytes32[];
     using SafeCast for uint256;
     using Clones for address;
@@ -96,21 +95,6 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         LockerFeeRecipient[] lockerFeeRecipients;
     }
 
-    struct Launch {
-        PartyERC20 token;
-        bytes32 merkleRoot;
-        uint96 totalContributions;
-        uint96 targetContribution;
-        uint96 maxContributionPerAddress;
-        uint96 numTokensForLP;
-        uint96 numTokensForDistribution;
-        uint96 numTokensForRecipient;
-        address recipient;
-        uint16 finalizationFeeBps;
-        uint16 withdrawalFeeBps;
-        PartyLPLocker.LPInfo lpInfo;
-    }
-
     PartyTokenAdminERC721 public immutable TOKEN_ADMIN_ERC721;
     PartyERC20 public immutable PARTY_ERC20_LOGIC;
     INonfungiblePositionManager public immutable POSITION_MANAGER;
@@ -120,11 +104,22 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
     int24 public immutable MAX_TICK;
     address public immutable WETH;
     ILocker public immutable POSITION_LOCKER;
+    address public immutable owner;
 
     uint32 public numOfLaunches;
 
-    Launch public launch;
     PartyERC20 public token;
+    bytes32 public merkleRoot;
+    uint96 public totalContributions;
+    uint96 public targetContribution;
+    uint96 public maxContributionPerAddress;
+    uint96 public numTokensForLP;
+    uint96 public numTokensForDistribution;
+    uint96 public numTokensForRecipient;
+    address public recipient;
+    uint16 public finalizationFeeBps;
+    uint16 public withdrawalFeeBps;
+    PartyLPLocker.LPInfo public lpInfo;
 
     constructor(
         address payable partyDAO,
@@ -136,8 +131,8 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         uint24 poolFee,
         ILocker positionLocker
     )
-        Ownable(partyDAO)
     {
+        owner = partyDAO;
         TOKEN_ADMIN_ERC721 = tokenAdminERC721;
         PARTY_ERC20_LOGIC = partyERC20Logic;
         POSITION_MANAGER = positionManager;
@@ -176,7 +171,7 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         }
         if (launchArgs.numTokensForRecipient > 0 && launchArgs.recipient == address(0)) revert LaunchInvalid();
 
-        bytes32 tokenSalt = keccak256(abi.encodePacked(address(this), block.chainid, block.timestamp);
+        bytes32 tokenSalt = keccak256(abi.encodePacked(address(this), block.chainid, block.timestamp));
 
         uint256 tokenAdminId = TOKEN_ADMIN_ERC721.mint(
             erc20Args.name,
@@ -184,8 +179,7 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
             msg.sender,
             Clones.predictDeterministicAddress(
                 address(PARTY_ERC20_LOGIC), tokenSalt)
-            )
-        );
+            );
 
         // Deploy new ERC20 token. Mints the total supply upfront to this contract.
         token = PartyERC20(
@@ -212,29 +206,29 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
     }
 
     function _initializeLaunch(
-        PartyERC20 token,
+        PartyERC20 _token,
         uint256 tokenAdminId,
         LaunchArgs memory launchArgs
     )
         private
     {
-        launch.token = token;
-        launch.targetContribution = launchArgs.targetContribution;
-        launch.totalContributions = 0;
-        launch.maxContributionPerAddress = launchArgs.maxContributionPerAddress;
-        launch.numTokensForLP = launchArgs.numTokensForLP;
-        launch.numTokensForDistribution = launchArgs.numTokensForDistribution;
-        launch.numTokensForRecipient = launchArgs.numTokensForRecipient;
-        launch.merkleRoot = launchArgs.merkleRoot;
-        launch.recipient = launchArgs.recipient;
-        launch.finalizationFeeBps = launchArgs.finalizationFeeBps;
-        launch.withdrawalFeeBps = launchArgs.withdrawalFeeBps;
-        launch.lpInfo.partyTokenAdminId = tokenAdminId;
+        token = _token;
+        targetContribution = launchArgs.targetContribution;
+        totalContributions = 0;
+        maxContributionPerAddress = launchArgs.maxContributionPerAddress;
+        numTokensForLP = launchArgs.numTokensForLP;
+        numTokensForDistribution = launchArgs.numTokensForDistribution;
+        numTokensForRecipient = launchArgs.numTokensForRecipient;
+        merkleRoot = launchArgs.merkleRoot;
+        recipient = launchArgs.recipient;
+        finalizationFeeBps = launchArgs.finalizationFeeBps;
+        withdrawalFeeBps = launchArgs.withdrawalFeeBps;
+        lpInfo.partyTokenAdminId = tokenAdminId;
 
         uint16 totalAdditionalFeeRecipientsBps = 0;
         for (uint256 i = 0; i < launchArgs.lockerFeeRecipients.length; i++) {
             if (launchArgs.lockerFeeRecipients[i].recipient == address(0)) revert InvalidRecipient();
-            launch.lpInfo.additionalFeeRecipients.push(
+            lpInfo.additionalFeeRecipients.push(
                 PartyLPLocker.AdditionalFeeRecipient({
                     recipient: launchArgs.lockerFeeRecipients[i].recipient,
                     percentageBps: launchArgs.lockerFeeRecipients[i].bps,
@@ -248,28 +242,28 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
 
     function updateAllowlist(bytes32 newMerkleRoot) external {
         // Check the launch is active
-        if (_getLaunchLifecycle(launch) != LaunchLifecycle.Active) {
-            revert InvalidLifecycleState(_getLaunchLifecycle(launch), LaunchLifecycle.Active);
+        if (_getLaunchLifecycle() != LaunchLifecycle.Active) {
+            revert InvalidLifecycleState(_getLaunchLifecycle(), LaunchLifecycle.Active);
         }
 
         // Check the caller is the token admin
-        uint256 tokenAdminId = launch.lpInfo.partyTokenAdminId;
+        uint256 tokenAdminId = lpInfo.partyTokenAdminId;
         address tokenAdmin = TOKEN_ADMIN_ERC721.ownerOf(tokenAdminId);
         if (msg.sender != tokenAdmin) revert OnlyAdmin(tokenAdmin);
 
-        emit AllowlistUpdated(launch.merkleRoot, newMerkleRoot);
+        emit AllowlistUpdated(merkleRoot, newMerkleRoot);
 
-        launch.merkleRoot = newMerkleRoot;
+        merkleRoot = newMerkleRoot;
     }
 
     function getLaunchLifecycle() public view returns (LaunchLifecycle) {
         return _getLaunchLifecycle();
     }
 
-    function _getLaunchLifecycle() private pure returns (LaunchLifecycle) {
-        if (launch.targetContribution == 0) {
+    function _getLaunchLifecycle() private view returns (LaunchLifecycle) {
+        if (targetContribution == 0) {
             revert LaunchInvalid();
-        } else if (launch.totalContributions >= launch.targetContribution) {
+        } else if (totalContributions >= targetContribution) {
             return LaunchLifecycle.Finalized;
         } else {
             return LaunchLifecycle.Active;
@@ -292,15 +286,15 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         payable
         returns (uint96 tokensReceived)
     {
-        if (address(launch.token) != tokenAddress) revert LaunchInvalid();
+        if (address(token) != tokenAddress) revert LaunchInvalid();
 
         // Verify merkle proof if merkle root is set
-        if (launch.merkleRoot != bytes32(0)) {
+        if (merkleRoot != bytes32(0)) {
             bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
-            if (!MerkleProof.verifyCalldata(merkleProof, launch.merkleRoot, leaf)) revert InvalidMerkleProof();
+            if (!MerkleProof.verifyCalldata(merkleProof, merkleRoot, leaf)) revert InvalidMerkleProof();
         }
 
-        (launch, tokensReceived) = _contribute(msg.sender, msg.value.toUint96(), comment);
+        tokensReceived = _contribute(msg.sender, msg.value.toUint96(), comment);
     }
 
     function _contribute(
@@ -309,46 +303,45 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         string memory comment
     )
         private
-        returns (Launch memory, uint96)
+        returns (uint96)
     {
-        LaunchLifecycle launchLifecycle = _getLaunchLifecycle(launch);
+        LaunchLifecycle launchLifecycle = _getLaunchLifecycle();
         if (launchLifecycle != LaunchLifecycle.Active) {
             revert InvalidLifecycleState(launchLifecycle, LaunchLifecycle.Active);
         }
         if (amount == 0) revert ContributionZero();
         uint96 ethContributed = _convertTokensReceivedToETHContributed(
-            uint96(launch.token.balanceOf(contributor)), launch.targetContribution, launch.numTokensForDistribution
+            uint96(token.balanceOf(contributor))
         );
 
-        uint96 newTotalContributions = launch.totalContributions + amount;
+        uint96 newTotalContributions = totalContributions + amount;
         uint96 excessContribution;
-        if (newTotalContributions > launch.targetContribution) {
-            excessContribution = newTotalContributions - launch.targetContribution;
+        if (newTotalContributions > targetContribution) {
+            excessContribution = newTotalContributions - targetContribution;
             amount -= excessContribution;
 
-            newTotalContributions = launch.targetContribution;
+            newTotalContributions = targetContribution;
         }
 
-        uint96 maxContributionPerAddress = launch.maxContributionPerAddress;
         if (ethContributed + amount > maxContributionPerAddress) {
             revert ContributionsExceedsMaxPerAddress(amount, ethContributed, maxContributionPerAddress);
         }
 
         // Update state
-        launch.totalContributions = launch.totalContributions = newTotalContributions;
+        totalContributions = newTotalContributions;
 
         uint96 tokensReceived =
-            _convertETHContributedToTokensReceived(amount, launch.targetContribution, launch.numTokensForDistribution);
+            _convertETHContributedToTokensReceived(amount);
 
         emit Contribute(contributor, comment, amount, tokensReceived);
 
         // Check if the crowdfund has reached its target and finalize if necessary
-        if (_getLaunchLifecycle(launch) == LaunchLifecycle.Finalized) {
+        if (_getLaunchLifecycle() == LaunchLifecycle.Finalized) {
             _finalize();
         }
 
         // Transfer the tokens to the contributor
-        launch.token.transfer(contributor, tokensReceived);
+        token.transfer(contributor, tokensReceived);
 
         if (excessContribution > 0) {
             // Refund excess contribution
@@ -356,7 +349,7 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
             if (!success) revert ETHTransferFailed(contributor, excessContribution);
         }
 
-        return (launch, tokensReceived);
+        return tokensReceived;
     }
 
     /**
@@ -372,7 +365,7 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         returns (uint96 tokensReceived)
     {
         tokensReceived = _convertETHContributedToTokensReceived(
-            ethContributed, launch.targetContribution, launch.numTokensForDistribution
+            ethContributed
         );
     }
 
@@ -389,17 +382,15 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         returns (uint96 ethContributed)
     {
         ethContributed = _convertTokensReceivedToETHContributed(
-            tokensReceived, launch.targetContribution, launch.numTokensForDistribution
+            tokensReceived
         );
     }
 
     function _convertETHContributedToTokensReceived(
-        uint96 ethContributed,
-        uint96 targetContribution,
-        uint96 numTokensForDistribution
+        uint96 ethContributed
     )
         private
-        pure
+        view
         returns (uint96 tokensReceived)
     {
         // tokensReceived = ethContributed * numTokensForDistribution / targetContribution
@@ -408,12 +399,10 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
     }
 
     function _convertTokensReceivedToETHContributed(
-        uint96 tokensReceived,
-        uint96 targetContribution,
-        uint96 numTokensForDistribution
+        uint96 tokensReceived
     )
         private
-        pure
+        view
         returns (uint96 ethContributed)
     {
         // tokensReceived = ethContributed * numTokensForDistribution / targetContribution
@@ -422,18 +411,18 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
     }
 
     function _finalize() private {
-        uint96 finalizationFee = (launch.targetContribution * launch.finalizationFeeBps) / 1e4;
+        uint96 finalizationFee = (targetContribution * finalizationFeeBps) / 1e4;
         uint96 flatLockFee = POSITION_LOCKER.getFlatLockFee();
-        uint96 amountForPool = launch.targetContribution - finalizationFee - flatLockFee;
+        uint96 amountForPool = targetContribution - finalizationFee - flatLockFee;
 
         (address token0, address token1) =
-            WETH < address(launch.token) ? (WETH, address(launch.token)) : (address(launch.token), WETH);
-        (uint256 amount0, uint256 amount1) = WETH < address(launch.token)
-            ? (amountForPool, launch.numTokensForLP)
-            : (launch.numTokensForLP, amountForPool);
+            WETH < address(token) ? (WETH, address(token)) : (address(token), WETH);
+        (uint256 amount0, uint256 amount1) = WETH < address(token)
+            ? (amountForPool, numTokensForLP)
+            : (numTokensForLP, amountForPool);
 
         // Add liquidity to the pool
-        launch.token.approve(address(POSITION_MANAGER), launch.numTokensForLP);
+        token.approve(address(POSITION_MANAGER), numTokensForLP);
 
         (uint256 tokenId,,,) = POSITION_MANAGER.mint{ value: amountForPool }(
             INonfungiblePositionManager.MintParams({
@@ -452,23 +441,23 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
         );
 
         // Transfer finalization fee to PartyDAO
-        owner().call{ value: finalizationFee, gas: 1e5 }("");
+        owner.call{ value: finalizationFee, gas: 1e5 }("");
 
         // Transfer tokens to recipient
-        if (launch.numTokensForRecipient > 0) {
-            launch.token.transfer(launch.recipient, launch.numTokensForRecipient);
+        if (numTokensForRecipient > 0) {
+            token.transfer(recipient, numTokensForRecipient);
 
-            emit RecipientTransfer(launch.token, launch.recipient, launch.numTokensForRecipient);
+            emit RecipientTransfer(token, recipient, numTokensForRecipient);
         }
 
         // Indicate launch succeeded
-        TOKEN_ADMIN_ERC721.setLaunchSucceeded(launch.lpInfo.partyTokenAdminId);
+        TOKEN_ADMIN_ERC721.setLaunchSucceeded(lpInfo.partyTokenAdminId);
 
         // Unpause token
-        launch.token.setPaused(false);
+        token.setPaused(false);
 
         // Renounce ownership
-        launch.token.renounceOwnership();
+        token.renounceOwnership();
 
         // Transfer flat fee to locker contract
         if (flatLockFee > 0) {
@@ -477,18 +466,18 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
 
         // Transfer LP to fee locker contract
         POSITION_MANAGER.safeTransferFrom(
-            address(this), address(POSITION_LOCKER), tokenId, abi.encode(launch.lpInfo, flatLockFee, launch.token)
+            address(this), address(POSITION_LOCKER), tokenId, abi.encode(lpInfo, flatLockFee, token)
         );
 
-        emit Finalized(launch.token, tokenId, amountForPool);
+        emit Finalized(token, tokenId, amountForPool);
     }
 
     function _initializeUniswapPool(uint96 amountForPool) private returns (address pool) {
-        (uint256 amount0, uint256 amount1) = WETH < address(launch.token)
-            ? (amountForPool, launch.numTokensForLP)
-            : (launch.numTokensForLP, amountForPool);
+        (uint256 amount0, uint256 amount1) = WETH < address(token)
+            ? (amountForPool, numTokensForLP)
+            : (numTokensForLP, amountForPool);
 
-        pool = UNISWAP_FACTORY.createPool(address(launch.token), WETH, POOL_FEE);
+        pool = UNISWAP_FACTORY.createPool(address(token), WETH, POOL_FEE);
         IUniswapV3Pool(pool).initialize(_calculateSqrtPriceX96(amount0, amount1));
     }
 
@@ -504,26 +493,24 @@ contract PartyTokenLauncher is Ownable, IERC721Receiver, Implementation {
      * @return ethReceived Number of ETH received for the withdrawal.
      */
     function withdraw(address receiver) external returns (uint96 ethReceived) {
-        LaunchLifecycle launchLifecycle = _getLaunchLifecycle(launch);
+        LaunchLifecycle launchLifecycle = _getLaunchLifecycle();
         if (launchLifecycle != LaunchLifecycle.Active) {
             revert InvalidLifecycleState(launchLifecycle, LaunchLifecycle.Active);
         }
 
-        uint96 tokensReceived = uint96(launch.token.balanceOf(msg.sender));
-        uint96 ethContributed = _convertTokensReceivedToETHContributed(
-            tokensReceived, launch.targetContribution, launch.numTokensForDistribution
-        );
-        uint96 withdrawalFee = (ethContributed * launch.withdrawalFeeBps) / 1e4;
+        uint96 tokensReceived = uint96(token.balanceOf(msg.sender));
+        uint96 ethContributed = _convertTokensReceivedToETHContributed(tokensReceived);
+        uint96 withdrawalFee = (ethContributed * withdrawalFeeBps) / 1e4;
         ethReceived = ethContributed - withdrawalFee;
 
         // Pull tokens from sender
-        launch.token.transferFrom(msg.sender, address(this), tokensReceived);
+        token.transferFrom(msg.sender, address(this), tokensReceived);
 
         // Update launch state
-        launch.totalContributions -= ethContributed;
+        totalContributions -= ethContributed;
 
         // Transfer withdrawal fee to PartyDAO
-        owner().call{ value: withdrawalFee, gas: 1e5 }("");
+        owner.call{ value: withdrawalFee, gas: 1e5 }("");
 
         // Transfer ETH to sender
         (bool success,) = receiver.call{ value: ethReceived, gas: 1e5 }("");

@@ -4,7 +4,7 @@ pragma solidity ^0.8.25;
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { PartyTokenLauncher } from "./PartyTokenLauncher.sol";
 
-contract PartyLaunchFactory is Ownable, IERC721Receiver {
+contract PartyLaunchFactory {
   using Clones for address;
 
   function createLauncher(
