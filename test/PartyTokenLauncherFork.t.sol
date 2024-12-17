@@ -11,7 +11,6 @@ contract PartyTokenLauncherForkTest is Test {
     PartyLaunchFactory launchFactory;
     PartyTokenLauncher launchImpl;
     PartyERC20 partyERC20Logic;
-    PartyTokenAdminERC721 creatorNFT;
     PartyLPLocker lpLocker;
     IUNCX uncx;
     address payable partyDAO;
@@ -28,15 +27,12 @@ contract PartyTokenLauncherForkTest is Test {
 
         partyDAO = payable(vm.createWallet("Party DAO").addr);
         uncx = IUNCX(0x231278eDd38B00B07fBd52120CEf685B9BaEBCC1);
-        lpLocker = new PartyLPLocker(address(this), positionManager, creatorNFT, uncx);
-        creatorNFT = new PartyTokenAdminERC721("PartyTokenAdminERC721", "PT721", address(this));
-        partyERC20Logic = new PartyERC20(creatorNFT);
+        lpLocker = new PartyLPLocker(address(this), positionManager, uncx);
+        partyERC20Logic = new PartyERC20();
         launchImpl = new PartyTokenLauncher(
-            partyDAO, creatorNFT, partyERC20Logic, positionManager, uniswapFactory, weth, poolFee, lpLocker
+            partyDAO, partyERC20Logic, positionManager, uniswapFactory, weth, poolFee, lpLocker
         );
         launchFactory = new PartyLaunchFactory();
-
-        // creatorNFT.setIsMinter(address(launch), true);
     }
 
     function testIntegration_launchLifecycle() public {
@@ -77,7 +73,7 @@ contract PartyTokenLauncherForkTest is Test {
         });
 
         vm.prank(creator);
-        PartyTokenLauncher launch = launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        PartyTokenLauncher launch = launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
 
         uint96 expectedTotalContributions;
         uint96 expectedPartyDAOBalance;
@@ -153,8 +149,7 @@ contract PartyTokenLauncherForkTest is Test {
             assertEq(partyDAO.balance, expectedPartyDAOBalance);
             assertEq(launch.token().balanceOf(launchArgs.recipient), launchArgs.numTokensForRecipient);
             assertApproxEqAbs(launch.token().balanceOf(address(launch)), 0, 0.0001e18);
-            (,, bool launchSuccessful,) = creatorNFT.tokenMetadatas(1); // TODO: fix this
-            assertEq(launchSuccessful, true);
+            assertEq(launch.launchSuccessful(), true);
         }
     }
 }

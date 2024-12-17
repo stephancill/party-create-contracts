@@ -6,7 +6,6 @@ import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerklePr
 import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { PartyERC20 } from "./PartyERC20.sol";
-import { PartyTokenAdminERC721 } from "./PartyTokenAdminERC721.sol";
 import { PartyLPLocker } from "./PartyLPLocker.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC721Receiver } from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
@@ -15,11 +14,15 @@ import { IUniswapV3Pool } from "@uniswap/v3-core/contracts/interfaces/IUniswapV3
 import { INonfungiblePositionManager } from "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
 import { ILocker } from "./interfaces/ILocker.sol";
 import { Implementation } from "./utils/Implementation.sol";
+import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import { IERC4906 } from "@openzeppelin/contracts/interfaces/IERC4906.sol";
+import { LibString } from "solady/src/utils/LibString.sol";
 
-contract PartyTokenLauncher is IERC721Receiver, Implementation {
+contract PartyTokenLauncher is IERC721Receiver, Implementation, ERC721, IERC4906 {
     using MerkleProof for bytes32[];
     using SafeCast for uint256;
     using Clones for address;
+    using LibString for address;
 
     event LaunchCreated(
         address indexed creator,
@@ -95,7 +98,6 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         LockerFeeRecipient[] lockerFeeRecipients;
     }
 
-    PartyTokenAdminERC721 public immutable TOKEN_ADMIN_ERC721;
     PartyERC20 public immutable PARTY_ERC20_LOGIC;
     INonfungiblePositionManager public immutable POSITION_MANAGER;
     IUniswapV3Factory public immutable UNISWAP_FACTORY;
@@ -105,8 +107,6 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
     address public immutable WETH;
     ILocker public immutable POSITION_LOCKER;
     address public immutable owner;
-
-    uint32 public numOfLaunches;
 
     PartyERC20 public token;
     bytes32 public merkleRoot;
@@ -121,25 +121,25 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
     uint16 public withdrawalFeeBps;
     PartyLPLocker.LPInfo public lpInfo;
 
+    bool public launchSuccessful;
+
     constructor(
         address payable partyDAO,
-        PartyTokenAdminERC721 tokenAdminERC721,
         PartyERC20 partyERC20Logic,
         INonfungiblePositionManager positionManager,
         IUniswapV3Factory uniswapFactory,
         address weth,
         uint24 poolFee,
         ILocker positionLocker
-    )
+    ) ERC721("", "")
     {
-        owner = partyDAO;
-        TOKEN_ADMIN_ERC721 = tokenAdminERC721;
         PARTY_ERC20_LOGIC = partyERC20Logic;
         POSITION_MANAGER = positionManager;
         UNISWAP_FACTORY = uniswapFactory;
         WETH = weth;
         POOL_FEE = poolFee;
         POSITION_LOCKER = positionLocker;
+        owner = partyDAO;
 
         int24 tickSpacing = uniswapFactory.feeAmountTickSpacing(poolFee);
         if (tickSpacing == 0) revert InvalidUniswapPoolFee();
@@ -150,6 +150,7 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
 
     /// @notice Initializer to be called prior to using the contract.
     function initialize(
+        address admin,
         ERC20Args memory erc20Args,
         LaunchArgs memory launchArgs
     ) public payable onlyInitialize {
@@ -171,17 +172,11 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         }
         if (launchArgs.numTokensForRecipient > 0 && launchArgs.recipient == address(0)) revert LaunchInvalid();
 
-        bytes32 tokenSalt = keccak256(abi.encodePacked(address(this), block.chainid, block.timestamp));
-
-        uint256 tokenAdminId = TOKEN_ADMIN_ERC721.mint(
-            erc20Args.name,
-            erc20Args.image,
-            msg.sender,
-            Clones.predictDeterministicAddress(
-                address(PARTY_ERC20_LOGIC), tokenSalt)
-            );
+        // Mint Admin NFT to admin
+        _mint(admin, 1);
 
         // Deploy new ERC20 token. Mints the total supply upfront to this contract.
+        bytes32 tokenSalt = keccak256(abi.encodePacked(address(this), block.chainid, block.timestamp));
         token = PartyERC20(
             address(PARTY_ERC20_LOGIC).cloneDeterministic(tokenSalt)
         );
@@ -189,15 +184,16 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
             erc20Args.name,
             erc20Args.symbol,
             erc20Args.description,
+            erc20Args.image,
             erc20Args.totalSupply,
             address(this),
             address(this),
-            tokenAdminId
+            address(this)
         );
         token.setPaused(true);
 
         // Initialize new launch.
-        _initializeLaunch(token, tokenAdminId, launchArgs);
+        _initializeLaunch(token, launchArgs);
 
         // Initialize empty Uniswap pool. Will be liquid after launch is successful and finalized.
         address pool = _initializeUniswapPool(launchArgs.targetContribution - finalizationFee - flatLockFee);
@@ -207,7 +203,6 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
 
     function _initializeLaunch(
         PartyERC20 _token,
-        uint256 tokenAdminId,
         LaunchArgs memory launchArgs
     )
         private
@@ -223,7 +218,7 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         recipient = launchArgs.recipient;
         finalizationFeeBps = launchArgs.finalizationFeeBps;
         withdrawalFeeBps = launchArgs.withdrawalFeeBps;
-        lpInfo.partyTokenAdminId = tokenAdminId;
+        lpInfo.adminNFT = address(this);
 
         uint16 totalAdditionalFeeRecipientsBps = 0;
         for (uint256 i = 0; i < launchArgs.lockerFeeRecipients.length; i++) {
@@ -247,9 +242,7 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         }
 
         // Check the caller is the token admin
-        uint256 tokenAdminId = lpInfo.partyTokenAdminId;
-        address tokenAdmin = TOKEN_ADMIN_ERC721.ownerOf(tokenAdminId);
-        if (msg.sender != tokenAdmin) revert OnlyAdmin(tokenAdmin);
+        if (balanceOf(msg.sender) == 0) revert OnlyAdmin(ownerOf(1));
 
         emit AllowlistUpdated(merkleRoot, newMerkleRoot);
 
@@ -441,7 +434,7 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         );
 
         // Transfer finalization fee to PartyDAO
-        owner.call{ value: finalizationFee, gas: 1e5 }("");
+        payable(owner).call{ value: finalizationFee, gas: 1e5 }("");
 
         // Transfer tokens to recipient
         if (numTokensForRecipient > 0) {
@@ -451,7 +444,7 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         }
 
         // Indicate launch succeeded
-        TOKEN_ADMIN_ERC721.setLaunchSucceeded(lpInfo.partyTokenAdminId);
+        setLaunchSucceeded();
 
         // Unpause token
         token.setPaused(false);
@@ -510,13 +503,49 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation {
         totalContributions -= ethContributed;
 
         // Transfer withdrawal fee to PartyDAO
-        owner.call{ value: withdrawalFee, gas: 1e5 }("");
+        payable(owner).call{ value: withdrawalFee, gas: 1e5 }("");
 
         // Transfer ETH to sender
         (bool success,) = receiver.call{ value: ethReceived, gas: 1e5 }("");
         if (!success) revert ETHTransferFailed(receiver, ethReceived);
 
         emit Withdraw(msg.sender, tokensReceived, ethContributed, withdrawalFee);
+    }
+
+    /**
+     * @dev See {IERC721Metadata-tokenURI}.
+     */
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
+        _requireOwned(tokenId);
+
+        string memory description = string.concat(
+            "This NFT has metadata admin controls over the ERC20 token at ",
+            address(token).toHexStringChecksummed(),
+            ". The holder of this NFT can change the image metadata of the token on-chain. The holder of this NFT can also claim fees from a permanently locked LP position for its token. The holder of this NFT cannot perform any actions that affect token functionality or supply."
+        );
+
+        return string.concat(
+            "data:application/json;utf8,",
+            "{\"name\":\"",
+            LibString.escapeJSON(token.name()),
+            "\",\"description\":\"",
+            description,
+            "\",\"image\":\"",
+            LibString.escapeJSON(token.image()),
+            "\",\"attributes\":[{\"trait_type\":\"Launched\",\"value\":",
+            launchSuccessful ? "\"True\"" : "\"False\"",
+            "},{\"trait_type\":\"Token Address\",\"value\":\"",
+            LibString.toHexString(address(token)),
+            "\"}]}"
+        );
+    }
+
+    /**
+     * @notice Set the metadata of a token indicating the launch succeeded
+     */
+    function setLaunchSucceeded() private {
+        launchSuccessful = true;
+        emit MetadataUpdate(1);
     }
 
     /// @notice Handle ERC721 tokens received.

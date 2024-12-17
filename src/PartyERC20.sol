@@ -9,7 +9,7 @@ import { ERC20VotesUpgradeable } from
     "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20VotesUpgradeable.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import { PartyTokenAdminERC721 } from "./PartyTokenAdminERC721.sol";
+import { IERC721 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 contract PartyERC20 is ERC20PermitUpgradeable, ERC20VotesUpgradeable, OwnableUpgradeable {
     event MetadataSet(string description);
@@ -25,20 +25,16 @@ contract PartyERC20 is ERC20PermitUpgradeable, ERC20VotesUpgradeable, OwnableUpg
     bool public paused;
 
     /**
-     * @notice The ID of the specific launch admin NFT that owns this collection.
+     * @notice The token launcher that created this token.
      */
-    uint256 public adminNftId;
+    IERC721 public adminNFT;
 
     /**
-     * @notice The NFT collector of launch admin NFTs.
+     * @notice Image of the token
      */
-    PartyTokenAdminERC721 public immutable ADMIN_NFT;
+    string public image;
 
-    /**
-     * @param adminNft Admin NFT contract
-     */
-    constructor(PartyTokenAdminERC721 adminNft) {
-        ADMIN_NFT = adminNft;
+    constructor() {
         _disableInitializers();
     }
 
@@ -47,19 +43,21 @@ contract PartyERC20 is ERC20PermitUpgradeable, ERC20VotesUpgradeable, OwnableUpg
      * @param name Name of the token
      * @param symbol Symbol of the token
      * @param description Description of the token (only emitted in event, not stored in contract)
+     * @param _image Image of the token
      * @param totalSupply Total supply of the token
      * @param receiver Where the entire supply is initially sent
      * @param owner Initial owner of the contract
-     * @param adminNFTId_ Admin NFT ID
+     * @param _adminNFT Admin NFT contract
      */
     function initialize(
         string memory name,
         string memory symbol,
         string memory description,
+        string memory _image,
         uint256 totalSupply,
         address receiver,
         address owner,
-        uint256 adminNFTId_
+        address _adminNFT
     )
         external
         initializer
@@ -70,8 +68,8 @@ contract PartyERC20 is ERC20PermitUpgradeable, ERC20VotesUpgradeable, OwnableUpg
 
         _mint(receiver, totalSupply);
         emit MetadataSet(description);
-
-        adminNftId = adminNFTId_;
+        image = _image;
+        adminNFT = IERC721(_adminNFT);
     }
 
     /**
@@ -126,18 +124,21 @@ contract PartyERC20 is ERC20PermitUpgradeable, ERC20VotesUpgradeable, OwnableUpg
      * @param description  Plain text description of the token.
      */
     function setMetadata(string memory description) external {
-        if (msg.sender != ADMIN_NFT.ownerOf(adminNftId)) {
+        if (adminNFT.balanceOf(msg.sender) == 0) {
             revert Unauthorized();
         }
         emit MetadataSet(description);
     }
 
     /**
-     * @notice Returns the image for the token.
+     * @notice Set the image for the token.
+     * @param _image Image of the token
      */
-    function getTokenImage() external view returns (string memory) {
-        (, string memory image,,) = ADMIN_NFT.tokenMetadatas(adminNftId);
-        return image;
+    function setImage(string memory _image) external {
+        if (adminNFT.balanceOf(msg.sender) == 0) {
+            revert Unauthorized();
+        }
+        image = _image;
     }
 
     /**

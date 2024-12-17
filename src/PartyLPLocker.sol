@@ -29,19 +29,18 @@ contract PartyLPLocker is ILocker, IERC721Receiver, Ownable {
     }
 
     struct LPInfo {
-        uint256 partyTokenAdminId;
+        address adminNFT;
         AdditionalFeeRecipient[] additionalFeeRecipients;
     }
 
     struct LockStorage {
         address token0;
         address token1;
-        uint256 partyTokenAdminId;
+        address adminNFT;
         AdditionalFeeRecipient[] additionalFeeRecipients;
     }
 
     INonfungiblePositionManager public immutable POSITION_MANAGER;
-    IERC721 public immutable PARTY_TOKEN_ADMIN;
     IUNCX public immutable UNCX;
 
     mapping(uint256 => LockStorage) public lockStorages;
@@ -53,13 +52,11 @@ contract PartyLPLocker is ILocker, IERC721Receiver, Ownable {
     constructor(
         address owner,
         INonfungiblePositionManager positionManager,
-        IERC721 partyTokenAdmin,
         IUNCX uncx
     )
         Ownable(owner)
     {
         POSITION_MANAGER = positionManager;
-        PARTY_TOKEN_ADMIN = partyTokenAdmin;
         UNCX = uncx;
     }
 
@@ -98,7 +95,7 @@ contract PartyLPLocker is ILocker, IERC721Receiver, Ownable {
             (,, lockStorages[lockId].token0, lockStorages[lockId].token1) =
                 abi.decode(res, (uint96, address, address, address));
         }
-        lockStorages[lockId].partyTokenAdminId = lpInfo.partyTokenAdminId;
+        lockStorages[lockId].adminNFT = lpInfo.adminNFT;
 
         uint256 token0TotalBps;
         uint256 token1TotalBps;
@@ -148,7 +145,7 @@ contract PartyLPLocker is ILocker, IERC721Receiver, Ownable {
             }
         }
 
-        address remainingReceiver = PARTY_TOKEN_ADMIN.ownerOf(lockStorage.partyTokenAdminId);
+        address remainingReceiver = IERC721(lockStorage.adminNFT).ownerOf(1);
 
         uint256 remainingAmount0 = IERC20(lockStorage.token0).balanceOf(address(this));
         if (remainingAmount0 > 0) IERC20(lockStorage.token0).transfer(remainingReceiver, remainingAmount0);

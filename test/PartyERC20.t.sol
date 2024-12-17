@@ -5,32 +5,31 @@ import { PartyERC20 } from "../src/PartyERC20.sol";
 import { IERC20Errors } from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UseImmutableCreate2Factory } from "./util/UseImmutableCreate2Factory.t.sol";
-import { PartyTokenAdminERC721 } from "../src/PartyTokenAdminERC721.sol";
 import { Vm } from "forge-std/src/Test.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
+import { MockAdminToken } from "./mock/MockAdminToken.t.sol";
 
 contract PartyERC20Test is UseImmutableCreate2Factory {
     PartyERC20 public token;
-    PartyTokenAdminERC721 public adminNFTId;
+    MockAdminToken public adminNFT;
 
     event MetadataSet(string description);
 
     function setUp() public override {
         super.setUp();
-        adminNFTId = new PartyTokenAdminERC721("Admin NFT", "ON", address(this));
         address tokenImpl =
-            factory.safeCreate2(bytes32(0), abi.encodePacked(type(PartyERC20).creationCode, abi.encode(adminNFTId)));
+            factory.safeCreate2(bytes32(0), abi.encodePacked(type(PartyERC20).creationCode));
+
+        adminNFT = new MockAdminToken("Admin NFT", "ON");
+        adminNFT.mint(address(this), 1);
 
         token = PartyERC20(Clones.clone(tokenImpl));
-        token.initialize("PartyERC20", "PARTY", "MyDescription", 100_000, address(this), address(this), 1);
-
-        adminNFTId.setIsMinter(address(this), true);
-        adminNFTId.mint("Admin NFT", "MyImage", address(this), address(1));
+        token.initialize("PartyERC20", "PARTY", "MyDescription", "https://example.com/image.png", 100_000, address(this), address(this), address(adminNFT));
     }
 
     function test_cannotReinit() public {
         vm.expectRevert(abi.encodeWithSelector(Initializable.InvalidInitialization.selector));
-        token.initialize("PartyERC20", "PARTY", "MyDescription", 100_000, address(this), address(this), 1);
+        token.initialize("PartyERC20", "PARTY", "MyDescription", "https://example.com/image.png", 100_000, address(this), address(this), address(adminNFT));
     }
 
     function test_transfer_failsWhenPaused(address tokenHolder) external {
@@ -60,11 +59,7 @@ contract PartyERC20Test is UseImmutableCreate2Factory {
     }
 
     function test_getTokenImage_fetchFromToken() external {
-        assertEq(token.getTokenImage(), "MyImage");
-
-        adminNFTId.setTokenImage(1, "NewImage");
-
-        assertEq(token.getTokenImage(), "NewImage");
+        assertEq(token.image(), "https://example.com/image.png");
     }
 
     function test_transferFrom_needsApproval(address tokenHolder, address spender) external {
@@ -87,7 +82,7 @@ contract PartyERC20Test is UseImmutableCreate2Factory {
     }
 
     function test_setMetadata_onlyNFTHolder() external {
-        adminNFTId.transferFrom(address(this), address(2), 1);
+        adminNFT.transferFrom(address(this), address(2), 1);
 
         vm.expectRevert(PartyERC20.Unauthorized.selector);
         token.setMetadata("NewDescription");

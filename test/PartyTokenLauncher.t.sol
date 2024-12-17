@@ -11,14 +11,12 @@ import { MockUNCX, IUNCX } from "./mock/MockUNCX.t.sol";
 import {PartyLaunchFactory} from "../src/PartyLaunchFactory.sol";
 import "../src/PartyTokenLauncher.sol";
 
-
 contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
-    event AllowlistUpdated(uint32 indexed launchId, bytes32 oldMerkleRoot, bytes32 newMerkleRoot);
+    event AllowlistUpdated(bytes32 oldMerkleRoot, bytes32 newMerkleRoot);
 
     PartyLaunchFactory launchFactory;
     PartyTokenLauncher launchImpl;
     PartyERC20 partyERC20Logic;
-    PartyTokenAdminERC721 creatorNFT;
     address payable partyDAO;
     PartyLPLocker positionLocker;
     INonfungiblePositionManager public positionManager;
@@ -42,19 +40,16 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         poolFee = 3000;
 
         partyDAO = payable(vm.createWallet("Party DAO").addr);
-        creatorNFT = new PartyTokenAdminERC721("PartyTokenAdminERC721", "PTA721", address(this));
-        positionLocker = new PartyLPLocker(address(this), positionManager, creatorNFT, uncx);
-        partyERC20Logic = new PartyERC20(creatorNFT);
+        positionLocker = new PartyLPLocker(address(this), positionManager, uncx);
+        partyERC20Logic = new PartyERC20();
         launchImpl = new PartyTokenLauncher(
-            partyDAO, creatorNFT, partyERC20Logic, positionManager, uniswapFactory, weth, poolFee, positionLocker
+            partyDAO, partyERC20Logic, positionManager, uniswapFactory, weth, poolFee, positionLocker
         );
         launchFactory = new PartyLaunchFactory();
-        // creatorNFT.setIsMinter(address(launch), true);
     }
 
     function test_constructor_works() public view {
         assertEq(address(launchImpl.owner()), partyDAO);
-        assertEq(address(launchImpl.TOKEN_ADMIN_ERC721()), address(creatorNFT));
         assertEq(address(launchImpl.POSITION_MANAGER()), address(positionManager));
         assertEq(address(launchImpl.UNISWAP_FACTORY()), address(uniswapFactory));
         assertEq(address(launchImpl.WETH()), weth);
@@ -96,7 +91,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         });
 
         vm.prank(creator);
-        launch = launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        launch = launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
         token = launch.token();
 
         vm.prank(creator);
@@ -113,7 +108,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         assertEq(creator.balance, 0);
     }
 
-    function test_createLaunch_withFullContribution() public returns (uint32 launchId) {
+    function test_createLaunch_withFullContribution() public {
         address creator = vm.createWallet("Creator").addr;
         address recipient = vm.createWallet("Recipient").addr;
         vm.deal(creator, 10 ether);
@@ -147,7 +142,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         });
 
         vm.prank(creator);
-        PartyTokenLauncher launch = launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        PartyTokenLauncher launch = launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
         launch.contribute{ value: 10 ether }(address(launch.token()), "", new bytes32[](0));
 
         assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Finalized);
@@ -188,24 +183,24 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidFee.selector);
-        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
 
         launchArgs.finalizationFeeBps = 0;
         launchArgs.withdrawalFeeBps = 251;
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidFee.selector);
-        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
     }
 
     function test_updateAllowlist_works() public {
         (PartyTokenLauncher launch,) = test_createLaunch_works();
         bytes32 newMerkleRoot = keccak256(abi.encodePacked("newMerkleRoot"));
 
-        address tokenAdmin = creatorNFT.ownerOf(1); // TODO: Implement owner NFT
+        address tokenAdmin = launch.ownerOf(1);
 
         vm.expectEmit(true, true, true, true);
-        emit AllowlistUpdated(1, bytes32(0), newMerkleRoot);
+        emit AllowlistUpdated(bytes32(0), newMerkleRoot);
 
         vm.prank(tokenAdmin);
         launch.updateAllowlist(newMerkleRoot);
@@ -214,10 +209,10 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
     }
 
     function test_updateAllowlist_invalidLifecycle() public {
-        (PartyTokenLauncher launch,) = test_createLaunch_works();
+        (PartyTokenLauncher launch,) = test_finalize_works();
         bytes32 newMerkleRoot = keccak256(abi.encodePacked("newMerkleRoot"));
 
-        address tokenAdmin = creatorNFT.ownerOf(1); // TODO: Implement owner NFT
+        address tokenAdmin = launch.ownerOf(1);
 
         vm.prank(tokenAdmin);
         vm.expectRevert(
@@ -384,8 +379,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         assertEq(contributor2.balance, 0);
         assertEq(token.balanceOf(address(launch)), 0);
         assertEq(address(launch).balance, 0);
-        (,, bool launchSuccessful,) = creatorNFT.tokenMetadatas(1);
-        assertEq(launchSuccessful, true);
+        assertEq(launch.launchSuccessful(), true);
     }
 
     function test_createLaunch_tooMuchToAdditionalRecipients_invalidBps() external {
@@ -427,14 +421,13 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidBps.selector);
-        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
     }
 
     function test_constructor_invalidUniswapPoolFee() external {
         vm.expectRevert(PartyTokenLauncher.InvalidUniswapPoolFee.selector);
         new PartyTokenLauncher(
             partyDAO,
-            creatorNFT,
             partyERC20Logic,
             positionManager,
             uniswapFactory,
@@ -448,7 +441,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         assertEq(launchImpl.VERSION(), "1.0.0");
     }
 
-    function test_createLaunch_invalidRecipient() public returns (uint32 launchId) {
+    function test_createLaunch_invalidRecipient() public {
         address creator = vm.createWallet("Creator").addr;
         address recipient = vm.createWallet("Recipient").addr;
         vm.deal(creator, 1 ether);
@@ -480,6 +473,6 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         vm.expectRevert(PartyTokenLauncher.InvalidRecipient.selector);
-        launchFactory.createLauncher(launchImpl, erc20Args, launchArgs);
+        launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
     }
 }

@@ -8,12 +8,14 @@ contract PartyLaunchFactory {
   using Clones for address;
 
   function createLauncher(
+        address admin,
         PartyTokenLauncher launcherImpl,
         PartyTokenLauncher.ERC20Args memory erc20Args,
         PartyTokenLauncher.LaunchArgs memory launchArgs
     ) public payable returns (PartyTokenLauncher inst) {
         inst = PartyTokenLauncher(address(launcherImpl).clone());
         inst.initialize{ value: msg.value }(
+            admin,
             erc20Args, 
             launchArgs
         );
