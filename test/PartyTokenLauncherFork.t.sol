@@ -74,6 +74,9 @@ contract PartyTokenLauncherForkTest is Test {
 
         vm.prank(creator);
         PartyTokenLauncher launch = launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
+        
+        vm.prank(creator);
+        launch.contribute{value: 1 ether}("Test contribution", new bytes32[](0));
 
         uint96 expectedTotalContributions;
         uint96 expectedPartyDAOBalance;
@@ -90,7 +93,7 @@ contract PartyTokenLauncherForkTest is Test {
         // Step 2: Contribute to the launch
         vm.deal(contributor1, 5 ether);
         vm.prank(contributor1);
-        launch.contribute{ value: 5 ether }(address(launch.token()), "Contribution", new bytes32[](0));
+        launch.contribute{ value: 5 ether }("Contribution", new bytes32[](0));
 
         expectedTotalContributions += 5 ether;
         {
@@ -121,7 +124,7 @@ contract PartyTokenLauncherForkTest is Test {
         uint96 remainingContribution = launchArgs.targetContribution - expectedTotalContributions;
         vm.deal(contributor2, remainingContribution);
         vm.prank(contributor2);
-        launch.contribute{ value: remainingContribution }(address(launch.token()), "Final Contribution", new bytes32[](0));
+        launch.contribute{ value: remainingContribution }("Final Contribution", new bytes32[](0));
 
         expectedTotalContributions += remainingContribution;
         {

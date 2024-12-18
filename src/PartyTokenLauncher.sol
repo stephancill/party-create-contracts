@@ -265,13 +265,11 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation, ERC721, IERC4906
 
     /**
      * @notice Contribute ETH to a launch and receive tokens.
-     * @param tokenAddress Address of the token expected to be received.
      * @param comment Comment for the contribution.
      * @param merkleProof Merkle proof for the contribution.
      * @return tokensReceived Number of tokens received for the contribution.
      */
     function contribute(
-        address tokenAddress,
         string calldata comment,
         bytes32[] calldata merkleProof
     )
@@ -279,8 +277,6 @@ contract PartyTokenLauncher is IERC721Receiver, Implementation, ERC721, IERC4906
         payable
         returns (uint96 tokensReceived)
     {
-        if (address(token) != tokenAddress) revert LaunchInvalid();
-
         // Verify merkle proof if merkle root is set
         if (merkleRoot != bytes32(0)) {
             bytes32 leaf = keccak256(abi.encodePacked(msg.sender));

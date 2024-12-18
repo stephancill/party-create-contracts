@@ -95,7 +95,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         token = launch.token();
 
         vm.prank(creator);
-        launch.contribute{ value: 1 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 1 ether }("", new bytes32[](0));
 
         assertEq(launch.WETH(), weth);
         assertEq(launch.owner(), partyDAO);
@@ -143,7 +143,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         vm.prank(creator);
         PartyTokenLauncher launch = launchFactory.createLauncher(creator, launchImpl, erc20Args, launchArgs);
-        launch.contribute{ value: 10 ether }(address(launch.token()), "", new bytes32[](0));
+        launch.contribute{ value: 10 ether }("", new bytes32[](0));
 
         assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Finalized);
     }
@@ -242,7 +242,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         vm.deal(contributor, 5 ether);
 
         vm.prank(contributor);
-        launch.contribute{ value: 5 ether }(address(token), "Adding funds", new bytes32[](0));
+        launch.contribute{ value: 5 ether }("Adding funds", new bytes32[](0));
 
         uint96 expectedTokensReceived = launch.convertETHContributedToTokensReceived(5 ether);
         assertEq(token.balanceOf(contributor), expectedTokensReceived);
@@ -259,14 +259,14 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         vm.deal(contributor, 2 ether);
 
         vm.prank(contributor);
-        launch.contribute{ value: 2 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 2 ether }("", new bytes32[](0));
         // Total contribution: 3 ether
 
         address finalContributor = vm.createWallet("Final Contributor").addr;
         vm.deal(finalContributor, 8 ether);
 
         vm.prank(finalContributor);
-        launch.contribute{ value: 8 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 8 ether }("", new bytes32[](0));
         // Total contribution: 10 ether (expect 1 ether refund)
 
 
@@ -285,12 +285,12 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
 
         // Contribute 1 ether so that 8 ether is required to finalize
         vm.prank(creator);
-        launch.contribute{ value: 1 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 1 ether }("", new bytes32[](0));
 
         // Contribute 9 ether, which exceeds max contribution per address, but
         // should be accepted because 1 ether was refunded
         vm.prank(contributor);
-        launch.contribute{ value: 9 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 9 ether }("", new bytes32[](0));
 
         assertEq(contributor.balance, 1 ether); // 1 ether should be refunded
     }
@@ -301,23 +301,13 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         vm.deal(contributor, 8 ether + 1);
 
         vm.prank(contributor);
-        launch.contribute{ value: 8 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 8 ether }("", new bytes32[](0));
 
         vm.prank(contributor);
         vm.expectRevert(
             abi.encodeWithSelector(PartyTokenLauncher.ContributionsExceedsMaxPerAddress.selector, 1, 8 ether, 8 ether)
         );
-        launch.contribute{ value: 1 }(address(token), "", new bytes32[](0));
-    }
-
-    function test_contribute_tokenAddressDoesNotMatch() external {
-        (PartyTokenLauncher launch,) = test_createLaunch_works();
-        address contributor = vm.createWallet("Contributor").addr;
-        vm.deal(contributor, 5 ether);
-
-        vm.prank(contributor);
-        vm.expectRevert(PartyTokenLauncher.LaunchInvalid.selector);
-        launch.contribute{ value: 5 ether }(address(uncx), "", new bytes32[](0));
+        launch.contribute{ value: 1 }("", new bytes32[](0));
     }
 
     function test_withdraw_works() public {
@@ -361,7 +351,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         address contributor = vm.createWallet("Contributor").addr;
         vm.deal(contributor, 2 ether);
         vm.prank(contributor);
-        launch.contribute{ value: 2 ether }(address(token), "", new bytes32[](0));
+        launch.contribute{ value: 2 ether }("", new bytes32[](0));
 
         address contributor2 = vm.createWallet("Final Contributor").addr;
 
@@ -369,7 +359,7 @@ contract PartyTokenLauncherTest is Test, MockUniswapV3Deployer {
         vm.deal(contributor2, remainingContribution);
 
         vm.prank(contributor2);
-        launch.contribute{ value: remainingContribution }(address(token), "Finalize", new bytes32[](0));
+        launch.contribute{ value: remainingContribution }("Finalize", new bytes32[](0));
 
         assertTrue(launch.getLaunchLifecycle() == PartyTokenLauncher.LaunchLifecycle.Finalized);
 
